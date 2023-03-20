@@ -7,7 +7,7 @@
 
 import os
 from unittest import TestCase
-
+from sqlalchemy import exc
 from models import db, User, Message, Follows
 
 # BEFORE we import our app, let's set an environmental variable
@@ -35,11 +35,36 @@ class UserModelTestCase(TestCase):
     def setUp(self):
         """Create test client, add sample data."""
 
-        User.query.delete()
-        Message.query.delete()
-        Follows.query.delete()
+        db.drop_all()
+        db.create_all()
+
+        user1 = User.signup('test1', 'email1@email.com', 'password', None)
+        userid1 = 111
+        user1.id = userid1
+
+        user2 = User.signup('test2', 'email2@email.com', 'password', None)
+        userid2 = 2222
+        user2.id = userid2
+
+        db.session.commit()
+
+        user1 = User.query.get(userid1)
+        user2 = User.query.get(userid2)
+
+        self.user1 = user1
+        self.userid1 = userid1
+
+        self.user2 = user2
+        self.userid2 = userid2
 
         self.client = app.test_client()
+
+
+    def tearDown(self):
+        res = super().tearDown()
+        db.session.rollback()
+        return res
+
 
     def test_user_model(self):
         """Does basic model work?"""
@@ -56,3 +81,80 @@ class UserModelTestCase(TestCase):
         # User should have no messages & no followers
         self.assertEqual(len(u.messages), 0)
         self.assertEqual(len(u.followers), 0)
+
+    def test_user_follows(self):
+        self.user1.following.append(self.user2)
+        db.session.commit()
+
+        self.assertEqual(len(self.user2.following), 0)
+        self.assertEqual(len(self.user2.followers), 1)
+        self.assertEqual(len(self.user1.followers), 0)
+        self.assertEqual(len(self.user1.following), 1)
+
+        self.assertEqual(self.user2.followers[0].id, self.user1.id)
+        self.assertEqual(self.user1.following[0].id, self.user2.id)
+    
+    def test_is_following(self):
+        self.user1.following.append(self.user2)
+        db.session.commit()
+
+        self.assertTrue(self.user1.is_following(self.user2))
+        self.assertFalse(self.user2.is_following(self.user1))
+
+
+    def test_is_followed_by(self):
+        self.user1.following.append(self.user2)
+        db.session.commit()
+
+        self.assertTrue(self.user2.is_followed_by(self.user1))
+        self.assertFalse(self.user1.is_followed_by(self.user2))
+
+    ### signup tests below ###
+
+    def test_signup(self):
+        u_test = User.signup('testtesttest', 'testtest@test.com', 'password', None)
+        userid = 99999
+        u_test.id = userid
+        db.session.commit()
+
+        u_test = User.query.get(userid)
+        self.assertIsNotNone(u_test)
+        self.assertEqual(u_test.username, "testtesttest")
+        self.assertEqual(u_test.email, "testtest@test.com")
+        self.assertNotEqual(u_test.password, 'password')
+
+        self.assertTrue(u_test.password.startswith('$2b$'))
+
+    def test_wrong_username_signup(self):
+        incorrect = User.signup(None, 'test@test.com', 'password', None)
+        userid = 123456789
+        incorrect.id = userid
+        with self.assertRaises(exc.IntegrityError) as context:
+            db.session.commit()
+
+    def test_wrong_email_signup(self):
+        incorrect = User.signup("testtest", None, "password", None)
+        userid = 1234567
+        incorrect.id = userid
+        with self.assertRaises(exc.IntegrityError) as context:
+            db.session.commit()
+
+    def test_wrong_password_signup(self):
+        with self.assertRaises(ValueError) as context:
+            User.signup('testtest', 'eamil@email.com', "", None)
+
+        with self.assertRaises(ValueError) as context:
+            User.signup('testtest', 'email@email.com', None, None)
+
+### auth tests
+
+    def test_valid_authentication(self):
+        u = User.authenticate(self.user1.username, 'password')
+        self.assertIsNotNone(u)
+        self.assertEqual(u.id, self.userid1)
+
+    def test_invalid_username(self):
+        self.assertFalse(User.authenticate('badusername', 'password'))
+    
+    def test_wrong_password(self):
+        self.assertFalse(User.authenticate(self.user1.username, 'badpassword'))
